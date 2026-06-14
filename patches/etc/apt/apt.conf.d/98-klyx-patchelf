@@ -1,0 +1,3 @@
+DPkg::Post-Invoke {
+    "/data/data/com.klyx/files/usr/etc/apt/klyx-patchelf-hook.sh || true";
+};
