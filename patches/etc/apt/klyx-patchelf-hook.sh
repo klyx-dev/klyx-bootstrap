@@ -24,17 +24,23 @@ set -u
 
 PREFIX=/data/data/com.klyx/files/usr
 WANT="$PREFIX/lib"
+PATCHELF_CHECKPOINT="$PREFIX/var/lib/klyx/.patchelf-checkpoint"
+
+mkdir -p "${PATCHELF_CHECKPOINT%/*}" 2>/dev/null || true
 
 debug() {
     [ -n "${KLYX_DEBUG:-}" ] && printf '%s\n' "klyx-patchelf-hook: $*" >&2
 }
 
-ARCH=$(uname -m 2>/dev/null || echo unknown)
-case "$ARCH" in
-    aarch64) MUSL_LD="ld-musl-aarch64.so.1" ;;
-    x86_64)  MUSL_LD="ld-musl-x86_64.so.1"  ;;
-    *)       MUSL_LD="ld-musl.so.1"          ;;
-esac
+find_files() {
+    if [ -e "$PATCHELF_CHECKPOINT" ]; then
+        debug "Using patchelf checkpoint; scanning files created since checkpoint"
+        find "$@" -type f -cnewer "$PATCHELF_CHECKPOINT" 2>/dev/null
+    else
+        debug "Checkpoint missing; scanning files changed in the last 10 minutes"
+        find "$@" -type f -cmin -10 2>/dev/null
+    fi
+}
 
 # Choose the patchelf binary to use for runpath fixes.
 # Prefer the musl-linked patchelf from the main prefix because it
@@ -89,28 +95,46 @@ maybe_hex_patch() {
 
     # Perform an in-place rewrite of embedded Termux paths to Klyx paths.
     # The replacement is equal length, so the binary layout remains stable.
+    # Original string: /data/data/com.termux/ is 22 bytes
+    # Replacement: /data/data/com.klyx/// is also 22 bytes
+    # 
+    # Why exactly 22 bytes? When patching binary data in-place, we cannot
+    # change the length of the string. If we reduced it to /data/data/com.klyx/
+    # (20 bytes), we would need to shift all the following binary data, which
+    # would corrupt section tables, symbol offsets, and the entire ELF structure.
+    # 
+    # Why add three slashes at the end? The Linux kernel treats consecutive
+    # path separators as equivalent to a single separator. So /data/data/com.klyx///
+    # resolves to /data/data/com.klyx/ during path resolution. The extra slashes
+    # have no functional effect on how the path is interpreted by the system,
+    # but they preserve the exact byte count needed for safe in-place patching.
     "$PREFIX/bin/perl" -e '
                 my $path = $ARGV[0];
                 open my $fh, "+<:raw", $path or exit 0;
                 my $data = do { local $/; <$fh> };
                 my $tcount = 0;
-                # Pass 1: com.termux/ -> com.klyx/ (22 bytes <-> 22 bytes,
+                # Pass 1: com.termux/ -> com.klyx/// (22 bytes <-> 22 bytes,
                 # in-place; the equal-length property of the com.klyx
                 # rename).
                 while ($data =~ m{/data/data/com\.termux/}g) {
                     my $offset = $-[0];
                     seek $fh, $offset, 0;
-                    print $fh "/data/data/com.klyx/\x00\x00";
+                    print $fh "/data/data/com.klyx///";
                     $tcount++;
                 }
                 close $fh;
-                print STDERR "klyx-rodata-hex: $tcount com.termux in $path\n" if ($tcount > 0);
+                print STDERR "klyx-rodata-hex: $tcount com.termux in $path\n" if ($tcount > 0 && $ENV{KLYX_DEBUG});
             ' "$1" 2>&1
 }
 
 # Scan recently modified installed files and apply compatibility fixes.
 # The first loop covers executables and helper binaries; the second loop
 # covers shared libraries that may need RUNPATH adjustment.
-find "$PREFIX/bin" "$PREFIX/sbin" "$PREFIX/libexec" "$PREFIX/glibc/bin" "$PREFIX/glibc/sbin" "$PREFIX/glibc/libexec" -type f -cmin -10 2>/dev/null | while IFS= read -r f; do maybe_hex_patch "$f"; maybe_patchelf "$f"; done
-find "$PREFIX/lib" "$PREFIX/glibc/lib" -type f -cmin -10 -name '*.so*' 2>/dev/null | while IFS= read -r f; do maybe_hex_patch "$f"; maybe_patchelf "$f"; done
+find_files "$PREFIX/bin" "$PREFIX/sbin" "$PREFIX/libexec" "$PREFIX/glibc/bin" "$PREFIX/glibc/sbin" "$PREFIX/glibc/libexec" -perm /111 | while IFS= read -r f; do maybe_hex_patch "$f"; maybe_patchelf "$f"; done
+find_files "$PREFIX/lib" "$PREFIX/glibc/lib" -name '*.so*' | while IFS= read -r f; do maybe_hex_patch "$f"; maybe_patchelf "$f"; done
+
+if [ ! -e "$PATCHELF_CHECKPOINT" ]; then
+    debug "Creating patchelf checkpoint file to skip bootstrap files in future runs"
+    touch "$PATCHELF_CHECKPOINT"
+fi
 exit 0
