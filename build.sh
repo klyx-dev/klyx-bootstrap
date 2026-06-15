@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
-# Bakes Klyx runtime patches into Termux bootstrap zips.
-# Source zips must already be built with TERMUX_APP_PACKAGE=com.klyx
-# (so binaries' DT_RUNPATH + shebangs already point at com.klyx).
-# This script overlays the apt/dpkg/profile.d hook scripts that run
-# at package-install time to keep newly apt-installed packages working.
+# Prepare Klyx bootstrap archives by applying compatibility patches.
+# The input archives must already be built for TERMUX_APP_PACKAGE=com.klyx
+# so that contained binaries and scripts already reference the Klyx prefix.
+# This build script does not perform binary rodata rewriting on the source
+# archive. Instead it copies hook scripts into the bootstrap image and
+# relies on package install-time fixes to handle freshly installed packages.
+#
+# Build process:
+#   1. Unpack the source bootstrap archive.
+#   2. Rewrite remaining com.termux text references to com.klyx.
+#   3. Add the local hooks from patches/ into the extracted image.
+#   4. Make the hook scripts executable.
+#   5. Repack the modified image into the output archive.
 #
 # Usage:
 #   ./build.sh <aarch64-input.zip> <aarch64-output.zip>
 #   ./build.sh <x86_64-input.zip>  <x86_64-output.zip>
 #   ./build.sh --both <aarch64-input.zip> <x86_64-input.zip> <outdir>
 #
-# NOTE: com.klyx (8 chars) != com.termux (10 chars), so we cannot
-# do in-place binary hex-patching of rodata. We rely on:
-#   1. patchelf for DT_RUNPATH (no length constraint)
-#   2. sed for text files and scripts
-#   3. LD_PRELOAD=libtermux-exec.so for execve path translation
-# This covers 99% of packages. The rare binary that hardcodes
-# /data/data/com.termux/ in rodata file-open calls is an edge case.
+# The bootstrap is designed around the fact that com.klyx and com.termux
+# have different lengths, so in-place binary rodata rewriting inside the
+# source archive is not safe. The runtime hooks instead use patchelf,
+# text rewriting, and execve translation to maintain compatibility.
 
 set -euo pipefail
 
@@ -50,18 +55,19 @@ patch_bootstrap() {
     echo "    Unzipping..."
     unzip -q "$IN_ZIP" -d "$ROOTFS"
 
-    echo "    Copying patches..."
-    cp -a "$PATCHES"/. "$ROOTFS"/
-
-    # Rewrite com.termux in ALL text files (scripts, dpkg metadata,
-    # apt configs, etc). grep -rlI skips binaries automatically.
+    # Rewrite any remaining Termux path references in extracted text files.
+    # grep -rlI finds filenames that contain the literal string and skips
+    # binary files. This is safe for scripts, config files, and metadata.
     echo "    Rewriting com.termux in all text files..."
     grep -rlI "com\.termux" "$ROOTFS" 2>/dev/null | while IFS= read -r f; do
         sed -i 's|com\.termux|com.klyx|g' "$f" 2>/dev/null || true
     done
     echo "    Done rewriting."
 
-    # Ensure hook scripts are executable
+    echo "    Copying patches..."
+    cp -a "$PATCHES"/. "$ROOTFS"/
+
+    # Make sure the bootstrap hooks are executable after they are copied in.
     chmod +x "$ROOTFS/etc/apt/klyx-patchelf-hook.sh" 2>/dev/null || true
     chmod +x "$ROOTFS/etc/apt/klyx-pre-install-rewrite.sh" 2>/dev/null || true
 
