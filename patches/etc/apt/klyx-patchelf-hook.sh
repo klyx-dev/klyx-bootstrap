@@ -1,14 +1,12 @@
 #!/data/data/com.klyx/files/usr/bin/sh
 # This hook runs after dpkg unpacks new files during package install.
-# It fixes compatibility issues in recently installed ELF binaries.
+# It fixes compatibility issues in recently installed ELF binaries by adjusting
+# their DT_RUNPATH entries.
 #
-# The script performs two main recovery actions:
-#   1. It rewrites embedded Termux path strings inside ELF rodata
-#      so binaries and scripts installed from packages resolve to
-#      the Klyx prefix.
-#   2. It adjusts ELF DT_RUNPATH entries for newly installed binaries
-#      when patchelf is available, so dynamic loaders find libraries
-#      under the Klyx prefix.
+# The script adjusts ELF DT_RUNPATH entries for newly installed binaries
+# when patchelf is available, so dynamic loaders find libraries
+# under the Klyx prefix. Path string rewriting is already handled by the
+# pre-install hook before .deb files are unpacked.
 #
 # The hook uses ctime (-cmin) instead of file modification time,
 # because dpkg preserves the original mtime from the package but
@@ -32,8 +30,7 @@ debug() {
 # Choose the patchelf binary to use for runpath fixes.
 # Prefer the musl-linked patchelf from the main prefix because it
 # matches the bootstrap environment, and fall back to the glibc-stack
-# version only if needed. If neither exists, the script still performs
-# the rodata path rewrite.
+# version only if needed.
 PATCHELF=""
 if [ -x "$PREFIX/bin/patchelf" ]; then
     PATCHELF="$PREFIX/bin/patchelf"
@@ -72,53 +69,15 @@ maybe_patchelf() {
         debug "patchelf failed to set rpath on $file"
     fi
 }
-maybe_hex_patch() {
-    [ -x "$PREFIX/bin/perl" ] || return 0
-    # Only inspect binaries that actually contain the Termux path.
-    # This avoids processing files unnecessarily.
-    local has_termux=0
-    grep -q -a -- '/data/data/com.termux/' "$1" 2>/dev/null && has_termux=1
-    [ $has_termux -eq 0 ] && return 0
-
-    # Perform an in-place rewrite of embedded Termux paths to Klyx paths.
-    # The replacement is equal length, so the binary layout remains stable.
-    # Original string: /data/data/com.termux/ is 22 bytes
-    # Replacement: /data/data/com.klyx/// is also 22 bytes
-    # 
-    # Why exactly 22 bytes? When patching binary data in-place, we cannot
-    # change the length of the string. If we reduced it to /data/data/com.klyx/
-    # (20 bytes), we would need to shift all the following binary data, which
-    # would corrupt section tables, symbol offsets, and the entire ELF structure.
-    # 
-    # Why add three slashes at the end? The Linux kernel treats consecutive
-    # path separators as equivalent to a single separator. So /data/data/com.klyx///
-    # resolves to /data/data/com.klyx/ during path resolution. The extra slashes
-    # have no functional effect on how the path is interpreted by the system,
-    # but they preserve the exact byte count needed for safe in-place patching.
-    "$PREFIX/bin/perl" -e '
-                my $path = $ARGV[0];
-                open my $fh, "+<:raw", $path or exit 0;
-                my $data = do { local $/; <$fh> };
-                my $tcount = 0;
-                # Pass 1: com.termux/ -> com.klyx/// (22 bytes <-> 22 bytes,
-                # in-place; the equal-length property of the com.klyx
-                # rename).
-                while ($data =~ m{/data/data/com\.termux/}g) {
-                    my $offset = $-[0];
-                    seek $fh, $offset, 0;
-                    print $fh "/data/data/com.klyx///";
-                    $tcount++;
-                }
-                close $fh;
-                print STDERR "klyx-rodata-hex: $tcount com.termux in $path\n" if ($tcount > 0 && $ENV{KLYX_DEBUG});
-            ' "$1" 2>&1
-}
+# the pre-install hook already rewrites embedded paths
+# in all extracted .deb files before dpkg installs them. patchelf --set-rpath
+# is sufficient for runtime library path adjustments.
 
 # Scan files with recent ctime changes and apply compatibility fixes.
 # Only files that have been created or modified in the past 10 minutes are processed.
 # This ensures the hook only repairs newly installed package files, not the original
 # bootstrap contents. The first loop covers executables and helper binaries; the
 # second loop covers shared libraries that may need RUNPATH adjustment.
-find "$PREFIX/bin" "$PREFIX/sbin" "$PREFIX/libexec" "$PREFIX/glibc/bin" "$PREFIX/glibc/sbin" "$PREFIX/glibc/libexec" -type f -cmin -10 2>/dev/null | while IFS= read -r f; do maybe_hex_patch "$f"; maybe_patchelf "$f"; done
-find "$PREFIX/lib" "$PREFIX/glibc/lib" -type f -cmin -10 -name '*.so*' 2>/dev/null | while IFS= read -r f; do maybe_hex_patch "$f"; maybe_patchelf "$f"; done
+find "$PREFIX/bin" "$PREFIX/sbin" "$PREFIX/libexec" "$PREFIX/glibc/bin" "$PREFIX/glibc/sbin" "$PREFIX/glibc/libexec" -type f -cmin -10 2>/dev/null | while IFS= read -r f; do maybe_patchelf "$f"; done
+find "$PREFIX/lib" "$PREFIX/glibc/lib" -type f -cmin -10 -name '*.so*' 2>/dev/null | while IFS= read -r f; do maybe_patchelf "$f"; done
 exit 0
