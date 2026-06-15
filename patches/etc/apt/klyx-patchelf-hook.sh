@@ -24,22 +24,9 @@ set -u
 
 PREFIX=/data/data/com.klyx/files/usr
 WANT="$PREFIX/lib"
-PATCHELF_CHECKPOINT="$PREFIX/var/lib/klyx/.patchelf-checkpoint"
-
-mkdir -p "${PATCHELF_CHECKPOINT%/*}" 2>/dev/null || true
 
 debug() {
     [ -n "${KLYX_DEBUG:-}" ] && printf '%s\n' "klyx-patchelf-hook: $*" >&2
-}
-
-find_files() {
-    if [ -e "$PATCHELF_CHECKPOINT" ]; then
-        debug "Using patchelf checkpoint; scanning files created since checkpoint"
-        find "$@" -type f -cnewer "$PATCHELF_CHECKPOINT" 2>/dev/null
-    else
-        debug "Checkpoint missing; scanning files changed in the last 10 minutes"
-        find "$@" -type f -cmin -10 2>/dev/null
-    fi
 }
 
 # Choose the patchelf binary to use for runpath fixes.
@@ -127,14 +114,11 @@ maybe_hex_patch() {
             ' "$1" 2>&1
 }
 
-# Scan recently modified installed files and apply compatibility fixes.
-# The first loop covers executables and helper binaries; the second loop
-# covers shared libraries that may need RUNPATH adjustment.
-find_files "$PREFIX/bin" "$PREFIX/sbin" "$PREFIX/libexec" "$PREFIX/glibc/bin" "$PREFIX/glibc/sbin" "$PREFIX/glibc/libexec" -perm /111 | while IFS= read -r f; do maybe_hex_patch "$f"; maybe_patchelf "$f"; done
-find_files "$PREFIX/lib" "$PREFIX/glibc/lib" -name '*.so*' | while IFS= read -r f; do maybe_hex_patch "$f"; maybe_patchelf "$f"; done
-
-if [ ! -e "$PATCHELF_CHECKPOINT" ]; then
-    debug "Creating patchelf checkpoint file to skip bootstrap files in future runs"
-    touch "$PATCHELF_CHECKPOINT"
-fi
+# Scan files with recent ctime changes and apply compatibility fixes.
+# Only files that have been created or modified in the past 10 minutes are processed.
+# This ensures the hook only repairs newly installed package files, not the original
+# bootstrap contents. The first loop covers executables and helper binaries; the
+# second loop covers shared libraries that may need RUNPATH adjustment.
+find "$PREFIX/bin" "$PREFIX/sbin" "$PREFIX/libexec" "$PREFIX/glibc/bin" "$PREFIX/glibc/sbin" "$PREFIX/glibc/libexec" -type f -cmin -10 2>/dev/null | while IFS= read -r f; do maybe_hex_patch "$f"; maybe_patchelf "$f"; done
+find "$PREFIX/lib" "$PREFIX/glibc/lib" -type f -cmin -10 -name '*.so*' 2>/dev/null | while IFS= read -r f; do maybe_hex_patch "$f"; maybe_patchelf "$f"; done
 exit 0
