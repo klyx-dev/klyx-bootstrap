@@ -64,6 +64,26 @@ patch_bootstrap() {
     done
     echo "    Done rewriting."
 
+    # Generate a manifest of all ELF files in the bootstrap so the runtime
+    # patchelf hook can skip them (input bootstrap is already built for
+    # com.klyx, so ELF rpaths are already correct).
+    echo "    Generating ELF file manifest..."
+    local ELF_DONE="$ROOTFS/var/lib/klyx/.patchelf-done"
+    mkdir -p "$(dirname "$ELF_DONE")"
+    # Use device-side paths so the runtime hook can match them directly.
+    # Non-ELF files in these dirs are rare; listing them in the manifest is
+    # harmless (the runtime hook just skips them unnecessarily).
+    find "$ROOTFS/bin" "$ROOTFS/lib" "$ROOTFS/libexec" \
+         "$ROOTFS/glibc/bin" "$ROOTFS/glibc/lib" "$ROOTFS/glibc/libexec" \
+         -type f 2>/dev/null > "$WORK/flist" || true
+    while IFS= read -r f; do
+        fs=$(stat -c%s "$f" 2>/dev/null) || continue
+        echo "/data/data/com.klyx/files/usr${f#$ROOTFS} $fs"
+    done < "$WORK/flist" > "$ELF_DONE"
+    local ELF_COUNT
+    ELF_COUNT=$(wc -l < "$ELF_DONE")
+    echo "    Recorded $ELF_COUNT ELF files (manifest saved)"
+
     echo "    Copying patches..."
     cp -a "$PATCHES"/. "$ROOTFS"/
 
