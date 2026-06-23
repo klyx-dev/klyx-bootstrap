@@ -1,5 +1,0 @@
-Welcome to Klyx Terminal!
-Working with packages:
- - Search:  pkg search <query>
- - Install: pkg install <package>
- - Upgrade: pkg upgrade

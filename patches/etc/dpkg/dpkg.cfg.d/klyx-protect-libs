@@ -1,5 +1,0 @@
-# Refuses to extract libc++_shared.so from any package. We ship our own,
-# the Termux apt repository's libc++ package ships a different
-# version, and replacing ours bricks apt + claude + patchelf.
-# See dpkg.cfg(5) for the path-exclude / path-include syntax.
-path-exclude=/data/data/com.klyx/files/usr/lib/libc++_shared.so

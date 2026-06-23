@@ -1,3 +1,0 @@
-DPkg::Post-Invoke {
-    "sed -i 's|/data/data/com\\.termux/|/data/data/com.klyx/|g' /data/data/com.klyx/files/usr/var/lib/dpkg/info/*.preinst /data/data/com.klyx/files/usr/var/lib/dpkg/info/*.postinst /data/data/com.klyx/files/usr/var/lib/dpkg/info/*.prerm /data/data/com.klyx/files/usr/var/lib/dpkg/info/*.postrm /data/data/com.klyx/files/usr/var/lib/dpkg/info/*.conffiles /data/data/com.klyx/files/usr/var/lib/dpkg/info/*.md5sums /data/data/com.klyx/files/usr/var/lib/dpkg/info/*.list /data/data/com.klyx/files/usr/var/lib/dpkg/info/*.triggers /data/data/com.klyx/files/usr/var/lib/dpkg/info/*.templates /data/data/com.klyx/files/usr/var/lib/dpkg/status 2>/dev/null || true";
-};
